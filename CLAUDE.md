@@ -21,7 +21,7 @@ Why the versions in `pyproject.toml` are what they are — this chain is load-be
 - **`opencv-contrib-python` only** — the original requirements.txt lists *both* `opencv-python` and `opencv-contrib-python`, which install competing `cv2` modules over each other. contrib is a superset; keep just it.
 - **`scipy`** — used directly by `audio.py` and `inference.py` but absent from the original requirements.txt; it only ever arrived transitively via librosa.
 
-`ffmpeg` must be on PATH (present via Homebrew); it is shelled out to for audio extraction and final muxing.
+`ffmpeg` must be on PATH — it is shelled out to for audio extraction and final muxing. Present locally via Homebrew; **missing on `gpu-desktop`** (see below).
 - The S3FD face detector weights must be at `face_detection/detection/sfd/s3fd.pth`. `preprocess.py` hard-fails at import if missing; `inference.py` fails later at detection time.
 - `checkpoints/`, `filelists/`, `temp/`, `results/` are committed as empty placeholders (README-only). `temp/` is not optional — inference writes `temp/temp.wav` and `temp/result.avi` there mid-run.
 - `.gitignore` excludes `filelists/*.txt`, `*.pth`, `*.jpg`, `*.mp4`, so datasets, filelists, and weights are all supplied out-of-band.
@@ -60,14 +60,30 @@ Both training scripts take `--checkpoint_path` to resume; `hq_wav2lip_train.py` 
 
 Evaluation lives in `evaluation/` and **requires a separate virtualenv** — it depends on the upstream `syncnet_python` repo, whose dependency versions conflict with this one's. See [evaluation/README.md](evaluation/README.md). Its scripts are also unconditionally `.cuda()`.
 
-### What actually runs on this machine (Apple Silicon, no CUDA)
+### Two machines: local Mac and the CUDA host
 
-The code only ever tests `torch.cuda.is_available()`; it has no concept of MPS, which is the only accelerator here. So:
-- **Inference works** — `inference.py` falls back to `device = 'cpu'` cleanly. It runs on CPU only, and will be slow. MPS is available (`torch.backends.mps.is_available()` is True) but unused; nothing wires it up.
-- **`preprocess.py` cannot run** — [preprocess.py:33](preprocess.py#L33) hardcodes `device='cuda:{}'`, with no fallback.
-- **`hq_wav2lip_train.py` cannot run** — [models/wav2lip.py:172](models/wav2lip.py#L172) hardcodes `.cuda()` inside `perceptual_forward`, which is reached whenever `disc_wt > 0` (default `0.07`). `wav2lip_train.py` and `color_syncnet_train.py` respect the device variable and would technically run on CPU, but training this at CPU speed is not realistic.
+This repo is worked on from two places, and **the same `uv.lock` serves both** — `uv sync --locked` succeeds unchanged on each. Do not fork the dependency config per platform; uv's resolution is universal and the lock already carries every platform's wheels, selecting per host:
 
-Treat this as a CUDA box's repo: preprocessing and training belong on a CUDA machine, and this checkout is practical for inference and code work.
+| | local | `gpu-desktop` (ssh alias) |
+|---|---|---|
+| Platform | macOS arm64 | WSL2, Ubuntu 26.04, x86_64 |
+| torch | `2.13.0` (CPU + MPS) | `2.13.0+cu130` — pulls the cu13 stack + triton, ~2 GB |
+| GPU | none | RTX 2060 SUPER, 8 GB, `sm_75` |
+
+Both get Python 3.10 via uv, so `.venv` is platform-specific and gitignored — never copy it between hosts; run `uv sync` on each.
+
+**The code only ever tests `torch.cuda.is_available()` and has no concept of MPS**, which is the Mac's only accelerator. That asymmetry decides where things run:
+
+- **Inference** — works on both. On the Mac it falls back to `device = 'cpu'` and is slow; MPS is available but unused, since nothing wires it up.
+- **`preprocess.py`** — **CUDA host only**. [preprocess.py:33](preprocess.py#L33) hardcodes `device='cuda:{}'` with no fallback.
+- **`hq_wav2lip_train.py`** — **CUDA host only**. [models/wav2lip.py:172](models/wav2lip.py#L172) hardcodes `.cuda()` inside `perceptual_forward`, reached whenever `disc_wt > 0` (default `0.07`). Verified working on `gpu-desktop`; raises on the Mac.
+- **`wav2lip_train.py` / `color_syncnet_train.py`** — respect the device variable and technically run on CPU, but training at CPU speed is not realistic. Use the CUDA host.
+
+So: preprocessing and training belong on `gpu-desktop`; the Mac checkout is for inference and code work.
+
+**`ffmpeg` is not installed on `gpu-desktop`** (`sudo apt install ffmpeg`, needs a password). Until it is, `inference.py` and `preprocess.py` will fail there when they shell out for audio extraction and muxing — every other dependency is in place.
+
+The 2060 SUPER's 8 GB is the real training constraint, not the environment. `hparams.batch_size` (16) and `syncnet_batch_size` (64) were tuned for 2020-era datacenter GPUs and will likely need lowering; `num_workers=16` also exceeds what a WSL2 box typically wants.
 
 ## Architecture
 
