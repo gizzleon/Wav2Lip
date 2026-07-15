@@ -1,0 +1,27 @@
+[project]
+name = "wav2lip"
+version = "0.1.0"
+description = "Accurately Lip-syncing Videos In The Wild (ACM MM 2020)"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+
+dependencies = [
+    # librosa 0.10 made librosa.filters.mel() keyword-only; audio.py:100 calls it
+    # positionally. 0.9.2 is the last release the code runs against unpatched.
+    "librosa==0.9.2",
+    # numba <0.57 (librosa 0.9.2's JIT backend) caps numpy at <1.24 and Python at <3.11.
+    "numba<0.57",
+    "numpy<1.24",
+    # opencv-contrib is a superset of opencv-python; installing both clobbers cv2.
+    "opencv-contrib-python>=4.2.0.34",
+    "scipy",
+    # librosa 0.9.2 imports pkg_resources, which setuptools dropped in 81.
+    "setuptools<81",
+    "torch",
+    "torchvision",
+    "tqdm",
+]
+
+[tool.uv]
+# Scripts, not an installable package - nothing to build.
+package = false
